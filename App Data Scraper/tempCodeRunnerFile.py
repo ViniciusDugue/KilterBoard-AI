@@ -1,0 +1,1 @@
+lines = text.split('\n')
