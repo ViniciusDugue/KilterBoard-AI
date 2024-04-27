@@ -65,22 +65,24 @@ matrix_of_vectors = np.array([
 [[0.0, 0.0], [0.87,0.5], [0.0, 0.0], [0.01,1.0], [0.0, 0.0], [-0.77,0.64], [0.0, 0.0], [0.76,0.65], [0.0, 0.0], [-0.02,1.0], [0.0, 0.0], [-0.33,0.95], [0.0, 0.0], [-0.01,1.0], [0.0, 0.0], [0.92,0.4], [0.0, 0.0], [-0.0,1.0], [0.0, 0.0], [-0.94,0.33], [0.0, 0.0], [0.01,1.0], [0.0, 0.0], [0.85,0.52], [0.0, 0.0], [-0.01,1.0], [0.0, 0.0], [-0.98,0.19], [0.0, 0.0], [0.81,0.59], [0.0, 0.0], [0.02,1.0], [0.0, 0.0], [-0.84,0.54], [0.0, 0.0]],
 [[0.7,0.71], [0.0, 0.0], [-0.99,0.12], [0.0, 0.0], [0.93,0.36], [0.0, 0.0], [-0.37,0.93], [0.0, 0.0], [0.12,0.99], [0.0, 0.0], [0.51,0.86], [0.0, 0.0], [-0.8,0.6], [0.0, 0.0], [0.02,1.0], [0.0, 0.0], [0.43,0.9], [0.0, 0.0], [-0.46,0.89], [0.0, 0.0], [-0.02,-1.0], [0.0, 0.0], [0.76,0.65], [0.0, 0.0], [-0.71,0.71], [0.0, 0.0], [-0.01,-1.0], [0.0, 0.0], [0.73,0.69], [0.0, 0.0], [-0.99,0.14], [0.0, 0.0], [-0.23,0.97], [0.0, 0.0], [-0.68,0.73]]])
 
+x = 2
+y = 0
+print(matrix_of_vectors[34-y][x]) # yx
+# plt.figure(figsize=(14, 14))
 
-plt.figure(figsize=(14, 14))
+# # Plotting the matrix of vectors
+# plot_vectors_matrix(matrix_of_vectors)
 
-# Plotting the matrix of vectors
-plot_vectors_matrix(matrix_of_vectors)
+# # Setting plot limits based on vector magnitude
+# max_val = 1  # Since vectors are normalized
+# plt.xlim(-1, matrix_of_vectors.shape[1])
+# plt.ylim(-1, matrix_of_vectors.shape[0])
 
-# Setting plot limits based on vector magnitude
-max_val = 1  # Since vectors are normalized
-plt.xlim(-1, matrix_of_vectors.shape[1])
-plt.ylim(-1, matrix_of_vectors.shape[0])
-
-# Adding labels and grid
-plt.axhline(-0.5, color='black', linewidth=0.5)
-plt.axvline(-0.5, color='black', linewidth=0.5)
-plt.grid(color='gray', linestyle='--', linewidth=0.5)
-plt.xlabel('X')
-plt.ylabel('Y')
-plt.title('Matrix of Normalized Vectors Plot')
-plt.show()
+# # Adding labels and grid
+# plt.axhline(-0.5, color='black', linewidth=0.5)
+# plt.axvline(-0.5, color='black', linewidth=0.5)
+# plt.grid(color='gray', linestyle='--', linewidth=0.5)
+# plt.xlabel('X')
+# plt.ylabel('Y')
+# plt.title('Matrix of Normalized Vectors Plot')
+# plt.show()
