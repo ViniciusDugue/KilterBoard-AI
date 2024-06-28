@@ -26,8 +26,6 @@ def plot_vgrade_counts(filtered_df):
     plt.show()
 
 def plot_hold_counts(filtered_df):
-    filtered_df['hold_count'] = filtered_df['frames'].str.count('p')
-
     filtered_counts = filtered_df['hold_count'].value_counts().sort_index().loc[:35]
 
     plt.figure(figsize=(14, 6))  # Adjust the width by changing the first value (e.g., 14)

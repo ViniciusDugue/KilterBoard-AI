@@ -41,12 +41,16 @@ def id_to_index(id):
 
 def id_to_coordinate(id):
     index = id_to_index(id)-1
+    # print(f"id: {id} index: {index}")
     x = (index % 35)
     y = index//35
     if y >=35:
         y-=2 #because the top 2 rows of large hand holds dont have any feet so its offset
-    if y <= 31 and y >=2 and (y -1) %4 == 0:
+    if y ==35:
+        y-=1 # idk I guess this is for the top right hold on the board??
+    if y <= 31 and y >=2 and (y -1) %4 == 0 and x!=34:
         x +=2 # because each alternating row of feet are offset by 2 on the x axis
+    
     return (x,y)
 
 # print(id_to_coordinate(1476))
