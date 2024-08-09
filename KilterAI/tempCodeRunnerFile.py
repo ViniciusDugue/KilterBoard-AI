@@ -1,1 +1,0 @@
-print(len(hold_directions2.tolist()))

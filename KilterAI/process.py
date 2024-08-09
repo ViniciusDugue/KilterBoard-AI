@@ -1,5 +1,5 @@
 import scipy.sparse as sp
-
+import numpy as np
 def map_vgrade(difficulty):
     ranges = [
         (10, 12, 0), (12, 14, 1), (14, 16, 2), (16, 18, 3), 
@@ -12,32 +12,6 @@ def map_vgrade(difficulty):
             return grade
 
     return None
-
-def id_to_index(id):
-    
-    if id <=1089: #bottom large (row) 17x1
-        index_offset = 35
-        row_index = 16 - (id - 1074)
-        final_index = index_offset + 2 * row_index
-    elif id <= 1395: #big holds (matrix) 17x18
-        index_offset = 35 + 35
-        index = id-1089
-        row = index//17
-        row_index = index%17
-        final_index = index_offset + row * 70 + 2 *row_index   
-    elif id <=1464: #bottom small (row) 18x1
-        row_index = 17 - (id - 1447)
-        final_index = 2 * row_index + 1
-    elif id <= 1599: # small holds (matrix) 9x15
-        index_offset = 35 + 35 + 35 + 1
-        index = id-1464
-        row = index//9
-        row_index = index% 9
-        final_index = index_offset + row * 70 + 4 * (row_index-1)
-    else:
-        final_index = id
-        print(id) 
-    return final_index
 
 def id_to_coordinate(id):
     index = id_to_index(id)-1
@@ -162,6 +136,55 @@ def filter_climbs(filtered_df, vgrade=-1, angle=-1):
     
     return filtered_df
 
+def determine_handedness(frame):
+    triplet_list = frame_to_triplets(frame)
+    print(triplet_list)
+    start_positions = [(x, y) for x, y, z in triplet_list if z == 2]
+    finish_positions = [(x, y) for x, y, z in triplet_list if z == 4]
+    print(start_positions)
+    print(finish_positions)
+
+    if not start_positions or not finish_positions:
+        return 'unknown'
+    
+    start_cols = [pos[0] for pos in start_positions]
+    finish_cols = [pos[0] for pos in finish_positions]
+    print(start_cols)
+    print(finish_cols)
+    avg_start_col = np.mean(start_cols)
+    avg_finish_col = np.mean(finish_cols)
+
+    if avg_start_col < avg_finish_col:
+        return 'right'
+    else:
+        return 'left'
+
+def sort_frame2(frame, handedness=True):
+    frame_words = frame.split('p')[1:]
+
+    words_with_rows_cols = []
+    for word in frame_words:
+        id_1 = int(word.split('r')[0])
+        col, row = id_to_coordinate(id_1)
+        words_with_rows_cols.append((row, col, word))
+
+    if handedness:
+        handedness_type = determine_handedness(frame)
+        if handedness_type == 'left':
+            # Sort from bottom to top, and then right to left
+            sorted_words_with_rows_cols = sorted(words_with_rows_cols, key=lambda x: (x[0], -x[1]))
+        else:
+            # Sort from bottom to top, and then left to right
+            sorted_words_with_rows_cols = sorted(words_with_rows_cols, key=lambda x: (x[0], x[1]))
+    else:
+        # Treat every climb as right-handed
+        sorted_words_with_rows_cols = sorted(words_with_rows_cols, key=lambda x: (x[0], x[1]))
+
+    sorted_frame_words = [word for _, _, word in sorted_words_with_rows_cols]
+    sorted_frame = 'p' + 'p'.join(sorted_frame_words)
+
+    return sorted_frame
+
 def sort_frame(frame):
     frame_words = frame.split('p')[1:]
 
@@ -185,3 +208,83 @@ def filtered_df_to_text_file(filtered_df, file_path='climbs.txt'):
     with open(file_path, 'w') as file:
         for climb_frame in climb_frames:
             file.write(climb_frame + '\n')
+
+def id_to_index(id):
+    
+    if id <=1089: #bottom large (row) 17x1
+        index_offset = 35
+        row_index = 16 - (id - 1074)
+        final_index = index_offset + 2 * row_index
+    elif id <= 1395: #big holds (matrix) 17x18
+        index_offset = 35 + 35
+        index = id-1089
+        row = index//17
+        row_index = index%17
+        final_index = index_offset + row * 70 + 2 *row_index   
+    elif id <=1464: #bottom small (row) 18x1
+        row_index = 17 - (id - 1447)
+        final_index = 2 * row_index + 1
+    elif id <= 1599: # small holds (matrix) 9x15
+        index_offset = 35 + 35 + 35 + 1
+        index = id-1464
+        row = index//9
+        row_index = index% 9
+        final_index = index_offset + row * 70 + 4 * (row_index-1)
+    else:
+        final_index = id
+        print(id) 
+    return final_index
+
+id_index_dict = {}
+for id in range(1073, 1396):
+    id_index_dict[id] = id_to_index(id)
+for id in range(1447, 1600):
+    id_index_dict[id] = id_to_index(id)
+
+sorted_id_index_tuples = sorted(id_index_dict.items(), key=lambda item: item[1])
+
+index2_to_id_dict = {index: id for index, (id, _) in enumerate(sorted_id_index_tuples)}
+id_to_index2_dict = {id: index for index, id in index2_to_id_dict.items()}
+
+def id_to_index2(id):
+    return id_to_index2_dict.get(id, None)
+
+def index2_to_id(index2):
+    return index2_to_id_dict.get(index2, None)
+
+def coordinates_distribution_to_index2(row_id, col_pred):
+    for col_id in col_pred:
+        index = row_id * 35 + col_id
+        print(index)
+        if index in id_index_dict:
+            return id_to_index2(id_index_dict[index])
+
+    print("Invalid")
+    for col_id in col_pred:
+        if col_id + 1 < 35:
+            index_right = row_id * 35 + (col_id + 1)
+            if index_right in id_index_dict:
+                print(index_right)
+                return id_to_index2(id_index_dict[index_right])
+        
+        if col_id - 1 >= 0:
+            index_left = row_id * 35 + (col_id - 1)
+            if index_left in id_index_dict:
+                print(index_left)
+                return id_to_index2(id_index_dict[index_left])
+        if col_id + 2 < 35:
+            index_right = row_id * 35 + (col_id + 2)
+            if index_right in id_index_dict:
+                print(index_right)
+                return id_to_index2(id_index_dict[index_right])
+        
+        if col_id - 2 >= 0:
+            index_left = row_id * 35 + (col_id - 2)
+            if index_left in id_index_dict:
+                print(index_left)
+                return id_to_index2(id_index_dict[index_left])
+    return None
+
+# def coordinates_to_index2(row_id, col_id):
+#     index =  row_id * 35 + col_id
+#     if index in id_index_dict:

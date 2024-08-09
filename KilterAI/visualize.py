@@ -188,4 +188,8 @@ def frame_to_imagecoords(frame):
 def frame_to_image(frame):
     image_path = "KilterBoardSetup.png"
     coords_list = frame_to_imagecoords(frame)
-    draw_colored_circles_on_image(image_path, coords_list)
+
+    # Add 2 to each id_2 value in the coords_list
+    modified_coords_list = [(x, y, id_2 + 2) for (x, y, id_2) in coords_list]
+
+    draw_colored_circles_on_image(image_path, modified_coords_list)
