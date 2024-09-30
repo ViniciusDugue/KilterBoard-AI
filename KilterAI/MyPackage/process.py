@@ -1,5 +1,8 @@
 import scipy.sparse as sp
 import numpy as np
+from .embeddings import hold_directions, hold_directions2, hold_magnitudes
+import torch
+
 def map_vgrade(difficulty):
     ranges = [
         (10, 12, 0), (12, 14, 1), (14, 16, 2), (16, 18, 3), 
@@ -97,7 +100,6 @@ def is_frame_valid(frame):
             return False
     return True
 
-
 def filter_climbs(filtered_df, vgrade=-1, angle=-1):
     climbs_to_remove = []
 
@@ -136,60 +138,11 @@ def filter_climbs(filtered_df, vgrade=-1, angle=-1):
     
     return filtered_df
 
-def determine_handedness(frame):
-    triplet_list = frame_to_triplets(frame)
-    print(triplet_list)
-    start_positions = [(x, y) for x, y, z in triplet_list if z == 2]
-    finish_positions = [(x, y) for x, y, z in triplet_list if z == 4]
-    print(start_positions)
-    print(finish_positions)
-
-    if not start_positions or not finish_positions:
-        return 'unknown'
-    
-    start_cols = [pos[0] for pos in start_positions]
-    finish_cols = [pos[0] for pos in finish_positions]
-    print(start_cols)
-    print(finish_cols)
-    avg_start_col = np.mean(start_cols)
-    avg_finish_col = np.mean(finish_cols)
-
-    if avg_start_col < avg_finish_col:
-        return 'right'
-    else:
-        return 'left'
-
-def sort_frame2(frame, handedness=True):
-    frame_words = frame.split('p')[1:]
-
-    words_with_rows_cols = []
-    for word in frame_words:
-        id_1 = int(word.split('r')[0])
-        col, row = id_to_coordinate(id_1)
-        words_with_rows_cols.append((row, col, word))
-
-    if handedness:
-        handedness_type = determine_handedness(frame)
-        if handedness_type == 'left':
-            # Sort from bottom to top, and then right to left
-            sorted_words_with_rows_cols = sorted(words_with_rows_cols, key=lambda x: (x[0], -x[1]))
-        else:
-            # Sort from bottom to top, and then left to right
-            sorted_words_with_rows_cols = sorted(words_with_rows_cols, key=lambda x: (x[0], x[1]))
-    else:
-        # Treat every climb as right-handed
-        sorted_words_with_rows_cols = sorted(words_with_rows_cols, key=lambda x: (x[0], x[1]))
-
-    sorted_frame_words = [word for _, _, word in sorted_words_with_rows_cols]
-    sorted_frame = 'p' + 'p'.join(sorted_frame_words)
-
-    return sorted_frame
-
 import math
 
 import math
 
-def sort_frame_5(frame, row_weight=0.1):
+def sort_frame_3(frame, row_weight=0.1):
     
     def weighted_distance(point1, point2, row_weight=0.1):
         x1, y1 = point1
@@ -342,23 +295,70 @@ def sort_frame_5(frame, row_weight=0.1):
 
     return sorted_frame
 
+import math
 
+def sort_frame_4(frame, row_weight=0.1):
 
+    def weighted_distance(point1, point2, row_weight=0.1):
+        x1, y1 = point1
+        x2, y2 = point2
+        euclidean = math.hypot(x2 - x1, y2 - y1)
+        # Lower y-values (higher rows) are better; subtract a weight based on the y-coordinate
+        weighted = euclidean - (row_weight * min(y1, y2))
+        return weighted
 
+    def find_center(hold1, hold2):
+        x1, y1 = hold1
+        x2, y2 = hold2
+        return ((x1 + x2) / 2, (y1 + y2) / 2)
 
+    def find_next_closest_hold(center, hand_holds, used_holds, row_weight=0.1):
+        min_distance = float('inf')
+        next_hold = None
+        for hold in hand_holds:
+            _, _, z, word = hold
+            if word in used_holds:
+                continue
+            # Get coordinates
+            col, row, _ = hold[:3]  # Corrected: col is x, row is y
+            point = (col, row)
+            distance = weighted_distance(center, point, row_weight)
+            if distance < min_distance:
+                min_distance = distance
+                next_hold = hold
+        return next_hold
 
-def sort_frame_4(frame, row_weight=0.1, max_distance_below=6.5):
+    def find_feet_below_center(center, foot_holds, used_holds):
+        center_x, center_y = center
+        qualifying_feet = []
+        for hold in foot_holds:
+            col, row, z, word = hold
+            if word in used_holds:
+                continue
+            # Foot hold must be below the center point's row (higher row number)
+            if row >= center_y:
+                continue
+            qualifying_feet.append(hold)
+        return qualifying_feet
+
+    # -------------------- Main Function Logic --------------------
+
     # Step 1: Split the frame into words
     frame_words = frame.split('p')[1:]  # Split and remove the first empty element
 
     # Step 2: Get triplet_list from the existing frame_to_triplets function
-    triplet_list = frame_to_triplets(frame)  # Assumes (row, col, z)
+    triplet_list = frame_to_triplets(frame)  # Assumes (col, row, z)
 
+    # Validate that triplet_list and frame_words are aligned
+    if len(triplet_list) != len(frame_words):
+        raise ValueError("Mismatch between number of triplets and frame words.")
+
+    # Step 3: Combine triplets with frame words to create (col, row, z, word) tuples
     combined_holds = []
-    for triplet, word in zip(triplet_list, frame_words):
-        row, col, z = triplet
-        hold_word = f"p{word}"  # Reconstruct the original hold string
-        combined_hold = (row, col, z, hold_word)  # (row, col, z, word)
+    for triplet, word_part in zip(triplet_list, frame_words):
+        col, row, z = triplet  # Corrected: col is x, row is y
+        hold_word = f"p{word_part}"  # Reconstruct the original hold string
+        combined_hold = (col, row, z, hold_word)  # (col, row, z, word)
         combined_holds.append(combined_hold)
 
     # Step 4: Categorize holds
@@ -366,8 +366,9 @@ def sort_frame_4(frame, row_weight=0.1, max_distance_below=6.5):
     foot_holds = []
     start_holds = []
     finish_holds = []
+
     for hold in combined_holds:
-        row, col, z, word = hold
+        col, row, z, word = hold
         if z == 0:
             start_holds.append(hold)
             hand_holds.append(hold)
@@ -375,195 +376,602 @@ def sort_frame_4(frame, row_weight=0.1, max_distance_below=6.5):
             hand_holds.append(hold)
         elif z == 2:
             finish_holds.append(hold)
-            hand_holds.append(hold)
+            # Do NOT add finish holds to hand_holds to keep them last
         elif z == 3:
             foot_holds.append(hold)
 
-    # Step 5: Sort holds by row ascending, then by column ascending
-    sorted_hand_holds = sorted(hand_holds, key=lambda x: (x[0], x[1]))
-    sorted_foot_holds = sorted(foot_holds, key=lambda x: (x[0], x[1]))
+    # Step 5: Sort holds by row ascending (lower to higher), then by column ascending
+    sorted_hand_holds = sorted(hand_holds, key=lambda x: (x[1], x[0]))  # Sort by row, then col
+    sorted_foot_holds = sorted(foot_holds, key=lambda x: (x[1], x[0]))  # Sort by row, then col
 
-    # Step 6: Initialize new_sequence and used_holds
-    new_sequence = []
+    # Step 6: Initialize sequence and used holds
+    sequence = []
     used_holds = set()
 
-    def find_closest_hold(current, candidates, weight=0.1):
-        curr_row, curr_col, _, _ = current
-        closest_hold = None
-        closest_modified_dist = float('inf')
-
-        for hold in candidates:
-            if tuple(hold) in used_holds:
-                continue
-            hold_row, hold_col, z, word = hold
-            if hold_row < curr_row:
-                continue  # Only consider holds at or above the current row
-
-            distance = np.sqrt((hold_row - curr_row) ** 2 + (hold_col - curr_col) ** 2)
-            modified_dist = distance + weight * (hold_row - curr_row)
-
-            if modified_dist < closest_modified_dist:
-                closest_modified_dist = modified_dist
-                closest_hold = hold
-
-        return closest_hold
-    
-    # Initialize with start holds or first two hand holds
+    # Initialize pointers
     if len(start_holds) >= 2:
-        start_holds_sorted = sorted(start_holds, key=lambda x: x[0])
-        pointer1, pointer2 = start_holds_sorted[:2]
-        new_sequence.extend([pointer1, pointer2])
-        used_holds.update([tuple(pointer1), tuple(pointer2)])
+        # Add both start holds in row order
+        start_holds_sorted = sorted(start_holds, key=lambda x: x[1])  # Sort by row
+        pointer1, pointer2 = start_holds_sorted[0], start_holds_sorted[1]
+        sequence.extend([pointer1, pointer2])
+        used_holds.update([pointer1[3], pointer2[3]])
     elif len(start_holds) == 1:
         pointer1 = pointer2 = start_holds[0]
-        new_sequence.append(pointer1)
-        used_holds.add(tuple(pointer1))
+        sequence.append(pointer1)
+        used_holds.add(pointer1[3])
     else:
         if len(sorted_hand_holds) >= 2:
-            pointer1, pointer2 = sorted_hand_holds[:2]
-            new_sequence.extend([pointer1, pointer2])
-            used_holds.update([tuple(pointer1), tuple(pointer2)])
+            pointer1, pointer2 = sorted_hand_holds[0], sorted_hand_holds[1]
+            sequence.extend([pointer1, pointer2])
+            used_holds.update([pointer1[3], pointer2[3]])
         elif len(sorted_hand_holds) == 1:
             pointer1 = pointer2 = sorted_hand_holds[0]
-            new_sequence.append(pointer1)
-            used_holds.add(tuple(pointer1))
+            sequence.append(pointer1)
+            used_holds.add(pointer1[3])
         else:
-            pointer1 = pointer2 = None
+            pointer1 = pointer2 = None  # No holds to process
 
-    # Helper function to find the closest hold
-    def find_closest_hold(current, candidates, weight=0.1):
-        curr_row, curr_col, _, _ = current
-        closest_hold = None
-        closest_modified_dist = float('inf')
+    # Step 7: Main loop to build the sequence
+    iteration = 1
+    while True:
+        if not pointer1 or not pointer2:
+            break  # No pointers to process
 
-        for hold in candidates:
-            if tuple(hold) in used_holds:
-                continue
-            hold_row, hold_col, z, word = hold
-            if hold_row < curr_row:
-                continue  # Only consider holds at or above the current row
+        # Get current hold positions
+        pos1 = (pointer1[0], pointer1[1])  # (col, row)
+        pos2 = (pointer2[0], pointer2[1])
 
-            distance = np.sqrt((hold_row - curr_row) ** 2 + (hold_col - curr_col) ** 2)
-            modified_dist = distance + weight * (hold_row - curr_row)
+        # Find center point
+        center = find_center(pos1, pos2)
 
-            if modified_dist < closest_modified_dist:
-                closest_modified_dist = modified_dist
-                closest_hold = hold
+        # Step 7a: Associate foot holds with the center point
+        feet_to_add = find_feet_below_center(center, sorted_foot_holds, used_holds)
+        if feet_to_add:
+            # Sort feet in descending order of row (higher rows first), then ascending col
+            feet_sorted = sorted(feet_to_add, key=lambda x: (-x[1], x[0]))
+            # Insert feet after the second pointer in the sequence
+            index_pointer2 = sequence.index(pointer2)
+            for i, foot_hold in enumerate(feet_sorted):
+                sequence.insert(index_pointer2 + 1 + i, foot_hold)
+                used_holds.add(foot_hold[3])
 
-        return closest_hold
+        # Find next closest hand hold
+        next_hold = find_next_closest_hold(center, sorted_hand_holds, used_holds, row_weight)
+        if not next_hold:
+            break  # No more hand holds to add
 
-    # Step 7: Build the new_sequence
-    while len(new_sequence) < len(sorted_hand_holds) + len(sorted_foot_holds):
-        if not new_sequence:
-            break
-        curr_hold = new_sequence[-1]
-        closest_hold = find_closest_hold(curr_hold, sorted_hand_holds, row_weight)
+        # Add to sequence
+        sequence.append(next_hold)
+        used_holds.add(next_hold[3])
 
-        if closest_hold:
-            # Add holds below or at the current row within max_distance_below
-            holds_within = [
-                hold for hold in sorted_hand_holds
-                if hold[0] <= curr_hold[0]
-                   and tuple(hold) not in used_holds
-                   and hold != closest_hold
-                   and np.sqrt((hold[0] - curr_hold[0]) ** 2 + (hold[1] - curr_hold[1]) ** 2) <= max_distance_below
-            ]
-            holds_within_sorted = sorted(
-                holds_within,
-                key=lambda hold: np.sqrt((hold[0] - curr_hold[0]) ** 2 + (hold[1] - curr_hold[1]) ** 2)
-            )
-            for hold in holds_within_sorted:
-                new_sequence.append(hold)
-                used_holds.add(tuple(hold))
+        # Check if next_hold is a finish hold (even though it's not in hand_holds, precaution)
+        if next_hold in finish_holds:
+            break  # Reached finish
 
-            # Add holds below or at the current row beyond max_distance_below
-            holds_beyond = [
-                hold for hold in sorted_hand_holds
-                if hold[0] <= curr_hold[0]
-                   and tuple(hold) not in used_holds
-                   and hold != closest_hold
-                   and np.sqrt((hold[0] - curr_hold[0]) ** 2 + (hold[1] - curr_hold[1]) ** 2) > max_distance_below
-            ]
-            holds_beyond_sorted = sorted(
-                holds_beyond,
-                key=lambda hold: np.sqrt((hold[0] - curr_hold[0]) ** 2 + (hold[1] - curr_hold[1]) ** 2)
-            )
-            for hold in holds_beyond_sorted:
-                new_sequence.append(hold)
-                used_holds.add(tuple(hold))
-
-            # Add the closest hold
-            new_sequence.append(closest_hold)
-            used_holds.add(tuple(closest_hold))
-
-            # Update pointers
-            pointer1, pointer2 = pointer2, closest_hold
+        # Update pointers
+        # Determine which pointer is furthest from next_hold
+        next_col, next_row = next_hold[0], next_hold[1]
+        distance1 = math.hypot(pos1[0] - next_col, pos1[1] - next_row)
+        distance2 = math.hypot(pos2[0] - next_col, pos2[1] - next_row)
+        if distance1 > distance2:
+            pointer1 = pointer2
+            pointer2 = next_hold
         else:
-            # Add remaining holds within distance
-            remaining_within = [
-                hold for hold in sorted_hand_holds
-                if tuple(hold) not in used_holds
-                   and hold[0] <= curr_hold[0]
-                   and np.sqrt((hold[0] - curr_hold[0]) ** 2 + (hold[1] - curr_hold[1]) ** 2) <= max_distance_below
-            ]
-            if remaining_within:
-                remaining_within_sorted = sorted(
-                    remaining_within,
-                    key=lambda hold: np.sqrt((hold[0] - curr_hold[0]) ** 2 + (hold[1] - curr_hold[1]) ** 2)
-                )
-                for hold in remaining_within_sorted:
-                    new_sequence.append(hold)
-                    used_holds.add(tuple(hold))
-            else:
-                # Add any remaining holds below or at the current row
-                remaining_beyond = [
-                    hold for hold in sorted_hand_holds
-                    if tuple(hold) not in used_holds
-                       and hold[0] <= curr_hold[0]
-                ]
-                if not remaining_beyond:
-                    # Add any remaining holds
-                    remaining = [hold for hold in sorted_hand_holds if tuple(hold) not in used_holds]
-                    if not remaining:
-                        break
-                    remaining_sorted = sorted(
-                        remaining,
-                        key=lambda hold: np.sqrt((hold[0] - curr_hold[0]) ** 2 + (hold[1] - curr_hold[1]) ** 2)
-                    )
-                    for hold in remaining_sorted:
-                        new_sequence.append(hold)
-                        used_holds.add(tuple(hold))
-                else:
-                    remaining_beyond_sorted = sorted(
-                        remaining_beyond,
-                        key=lambda hold: np.sqrt((hold[0] - curr_hold[0]) ** 2 + (hold[1] - curr_hold[1]) ** 2)
-                    )
-                    for hold in remaining_beyond_sorted:
-                        new_sequence.append(hold)
-                        used_holds.add(tuple(hold))
+            pointer2 = next_hold
 
-    # Step 8: Add footholds at the end
-    for foot_hold in sorted_foot_holds:
-        if tuple(foot_hold) not in used_holds:
-            new_sequence.append(foot_hold)
-            used_holds.add(tuple(foot_hold))
+        iteration += 1
 
-    # Step 9: Remove duplicates while preserving order
-    unique_sequence = []
-    seen = set()
-    for hold in new_sequence:
-        if tuple(hold) not in seen:
-            unique_sequence.append(hold)
-            seen.add(tuple(hold))
+    # Step 8: Append any remaining foot holds not yet added
+    remaining_foot_holds = [hold for hold in sorted_foot_holds if hold[3] not in used_holds]
 
-    # Step 10: Reconstruct the sorted frame string by joining the original hold strings
-    sorted_frame_words = [hold[3] for hold in unique_sequence]
-    sorted_frame = ' '.join(sorted_frame_words)
+    for foot_hold in remaining_foot_holds:
+        # Insert foot hold after the first hand hold that is above it
+        inserted = False
+        for i in range(len(sequence)):
+            seq_hold = sequence[i]
+            if seq_hold[1] < foot_hold[1]:  # If the current sequence hold's row is above the foot hold's row
+                sequence.insert(i + 1, foot_hold)
+                used_holds.add(foot_hold[3])
+                inserted = True
+                break
+        if not inserted:
+            # If no suitable position found, append at the end
+            sequence.append(foot_hold)
+            used_holds.add(foot_hold[3])
 
+    # Step 9: Append all finish holds to the end of the sequence to ensure they are last
+    for finish_hold in finish_holds:
+        if finish_hold[3] not in used_holds:
+            sequence.append(finish_hold)
+            used_holds.add(finish_hold[3])
+
+    # Step 10: Construct the sorted frame string by joining the original hold strings
+    sorted_frame_words = [hold[3] for hold in sequence]
+    sorted_frame = ' '.join(sorted_frame_words)  # Joining with space as separator
     return sorted_frame
 
+import math
+import math
 
-def sort_frame_3(frame):
+import math
+
+import math
+
+import math
+# MyPackage/process.py
+
+import scipy.sparse as sp
+import numpy as np
+from .embeddings import hold_directions, hold_directions2, hold_magnitudes
+import torch
+import math
+
+# Existing functions...
+# (map_vgrade, id_to_coordinate, frame_to_ids, frame_to_triplets, triplets_to_matrix, etc.)
+def benchmark4(frame, row_weight=0.1, percent=50.0, min_product=0.1):
+    def weighted_distance(point1, point2, row_weight=0.1):
+        x1, y1 = point1
+        x2, y2 = point2
+        euclidean = math.hypot(x2 - x1, y2 - y1)
+        # Adjust distance based on row_weight
+        weighted = euclidean - (row_weight * min(y1, y2))
+        return weighted
+
+    def find_center(hold1, hold2):
+        x1, y1 = hold1
+        x2, y2 = hold2
+        return ((x1 + x2) / 2, (y1 + y2) / 2)
+
+    def find_next_closest_hold(center, hand_holds, used_holds, row_weight=0.1):
+        min_distance = float('inf')
+        next_hold = None
+        for hold in hand_holds:
+            _, _, z, word = hold
+            if word in used_holds:
+                continue
+            # Get coordinates
+            col, row, _ = hold[:3]
+            point = (col, row)
+            distance = weighted_distance(center, point, row_weight)
+            if distance < min_distance:
+                min_distance = distance
+                next_hold = hold
+        return next_hold
+
+    # Step 1: Parse the frame into triplets
+    triplet_list = frame_to_triplets(frame)
+    frame_words = frame.split('p')[1:]
+
+    # Step 2: Combine triplets with frame words to create (col, row, z, word) tuples
+    combined_holds = [(x, y, z, f"p{word}") for triplet, word in zip(triplet_list, frame_words) for x, y, z in [triplet]]
+
+    # Step 3: Categorize holds
+    hand_holds = [hold for hold in combined_holds if hold[2] in (0, 1)]
+    sorted_hand_holds = sorted(hand_holds, key=lambda x: (x[1], x[0]))
+    start_holds = [hold for hold in sorted_hand_holds if hold[2] == 0]
+
+    sequence, used_holds, weighted_distances = [], set(), []
+    total_weighted_distance = 0.0
+
+    # Initialize pointers
+    if len(start_holds) >= 2:
+        pointer1, pointer2 = sorted(start_holds, key=lambda x: x[1])[:2]
+        sequence.extend([pointer1, pointer2])
+        used_holds.update([pointer1[3], pointer2[3]])
+        center = find_center((pointer1[0], pointer1[1]), (pointer2[0], pointer2[1]))
+    elif len(start_holds) == 1:
+        pointer1 = pointer2 = start_holds[0]
+        sequence.append(pointer1)
+        used_holds.add(pointer1[3])
+        center = (pointer1[0], pointer1[1])
+    elif len(sorted_hand_holds) >= 2:
+        pointer1, pointer2 = sorted_hand_holds[:2]
+        sequence.extend([pointer1, pointer2])
+        used_holds.update([pointer1[3], pointer2[3]])
+        center = find_center((pointer1[0], pointer1[1]), (pointer2[0], pointer2[1]))
+    elif len(sorted_hand_holds) == 1:
+        pointer1 = pointer2 = sorted_hand_holds[0]
+        sequence.append(pointer1)
+        used_holds.add(pointer1[3])
+        center = (pointer1[0], pointer1[1])
+    else:
+        return 0.0, 0.0, 0.0, 0.0, 0.0, []
+
+    # Step 4: Main loop to build the sequence and calculate weighted distances
+    while True:
+        next_hold = find_next_closest_hold(center, sorted_hand_holds, used_holds, row_weight)
+        if not next_hold:
+            break
+
+        new_center = find_center((next_hold[0], next_hold[1]), (pointer2[0], pointer2[1]))
+        distance = weighted_distance(center, new_center, row_weight)
+
+        # Retrieve hold magnitudes for current and next center points
+        hold_mag1 = get_hold_vector(pointer1[1], pointer1[0])[1]
+        hold_mag2 = get_hold_vector(pointer2[1], pointer2[0])[1]
+        hold_mag3 = get_hold_vector(next_hold[1], next_hold[0])[1]
+
+        # Calculate product of magnitudes
+        current_product = hold_mag1 * hold_mag2
+        next_product = hold_mag2 * hold_mag3
+        product = max(current_product * next_product, min_product)
+
+        # Calculate difficulty score
+        difficulty_score = distance / product
+        difficulty_score = min(difficulty_score, 1000.0)
+
+        # Aggregate weighted distances
+        total_weighted_distance += difficulty_score
+        weighted_distances.append(difficulty_score)
+
+        # Update pointers
+        sequence.append(next_hold)
+        used_holds.add(next_hold[3])
+        center = new_center
+        pointer1, pointer2 = pointer2, next_hold
+
+    if not weighted_distances:
+        return 0.0, 0.0, 0.0, 0.0, 0.0, []
+
+    average_weighted_distance = total_weighted_distance / len(weighted_distances)
+    highest_weighted_distance = max(weighted_distances)
+    k = max(1, int(math.ceil(len(weighted_distances) * (percent / 100.0))))
+    top_weighted_distances = sorted(weighted_distances, reverse=True)[:k]
+    top_n_weighted_distance_sum = sum(top_weighted_distances)
+    top_n_average_weighted_distance = top_n_weighted_distance_sum / k if k > 0 else 0.0
+
+    return (total_weighted_distance, average_weighted_distance, top_n_weighted_distance_sum,
+            top_n_average_weighted_distance, highest_weighted_distance, weighted_distances)
+
+def benchmark3(frame, row_weight=0.1, percent=50.0, min_product=0.1):
+    """
+    Calculates weighted distances between consecutive center points, incorporating hold magnitudes,
+    and returns comprehensive benchmarking metrics.
+
+    Parameters:
+        frame (str): The frame string representing the sequence of holds.
+        row_weight (float): Weight factor to adjust the influence of row positions.
+        percent (float): Percentage to determine top N weighted distances for additional metrics.
+        min_product (float): Minimum threshold for the product of hold magnitudes to prevent division by zero.
+
+    Returns:
+        tuple: (
+            total_weighted_distance (float),
+            average_weighted_distance (float),
+            top_n_weighted_distance_sum (float),
+            top_n_average_weighted_distance (float),
+            highest_weighted_distance (float)
+        )
+    """
+    def weighted_distance(point1, point2, row_weight=0.1):
+        x1, y1 = point1
+        x2, y2 = point2
+        euclidean = math.hypot(x2 - x1, y2 - y1)
+        # Adjust distance based on row_weight
+        weighted = euclidean - (row_weight * min(y1, y2))
+        return weighted
+
+    def find_center(hold1, hold2):
+        x1, y1 = hold1
+        x2, y2 = hold2
+        return ((x1 + x2) / 2, (y1 + y2) / 2)
+
+    def find_next_closest_hold(center, hand_holds, used_holds, row_weight=0.1):
+        min_distance = float('inf')
+        next_hold = None
+        for hold in hand_holds:
+            _, _, z, word = hold
+            if word in used_holds:
+                continue
+            # Get coordinates
+            col, row, _ = hold[:3]
+            point = (col, row)
+            distance = weighted_distance(center, point, row_weight)
+            if distance < min_distance:
+                min_distance = distance
+                next_hold = hold
+        return next_hold
+
+    # Step 1: Parse the frame into triplets
+    triplet_list = frame_to_triplets(frame)  # List of (x, y, z)
+    frame_words = frame.split('p')[1:]       # List of 'id1rval1', 'id2rval2', ...
+
+    # Step 2: Combine triplets with frame words to create (col, row, z, word) tuples
+    combined_holds = []
+    for triplet, word in zip(triplet_list, frame_words):
+        x, y, z = triplet
+        hold_word = f"p{word}"  # Reconstruct the original hold string
+        combined_hold = (x, y, z, hold_word)  # (col, row, z, word)
+        combined_holds.append(combined_hold)
+
+    # Step 3: Categorize holds
+    hand_holds = [hold for hold in combined_holds if hold[2] in (0, 1)]
+    sorted_hand_holds = sorted(hand_holds, key=lambda x: (x[1], x[0]))  # Sort by row, then col
+    start_holds = [hold for hold in sorted_hand_holds if hold[2] == 0]
+
+    sequence = []
+    used_holds = set()
+    total_weighted_distance = 0.0
+    weighted_distances = []
+
+    # Initialize pointers
+    if len(start_holds) >= 2:
+        # Add both start holds in row order
+        start_holds_sorted = sorted(start_holds, key=lambda x: x[1])  # Sort by row
+        pointer1, pointer2 = start_holds_sorted[0], start_holds_sorted[1]
+        sequence.extend([pointer1, pointer2])
+        used_holds.update([pointer1[3], pointer2[3]])
+        center = find_center((pointer1[0], pointer1[1]), (pointer2[0], pointer2[1]))
+    elif len(start_holds) == 1:
+        pointer1 = pointer2 = start_holds[0]
+        sequence.append(pointer1)
+        used_holds.add(pointer1[3])
+        center = (pointer1[0], pointer1[1])
+    else:
+        if len(sorted_hand_holds) >= 2:
+            pointer1, pointer2 = sorted_hand_holds[0], sorted_hand_holds[1]
+            sequence.extend([pointer1, pointer2])
+            used_holds.update([pointer1[3], pointer2[3]])
+            center = find_center((pointer1[0], pointer1[1]), (pointer2[0], pointer2[1]))
+        elif len(sorted_hand_holds) == 1:
+            pointer1 = pointer2 = sorted_hand_holds[0]
+            sequence.append(pointer1)
+            used_holds.add(pointer1[3])
+            center = (pointer1[0], pointer1[1])
+        else:
+            # No holds to process
+            return 0.0, 0.0, 0.0, 0.0, 0.0
+
+    # Step 4: Main loop to build the sequence and calculate weighted distances
+    while True:
+        # Find the next closest hold
+        next_hold = find_next_closest_hold(center, sorted_hand_holds, used_holds, row_weight)
+        if not next_hold:
+            break
+
+        # Calculate new center point
+        new_center = find_center((next_hold[0], next_hold[1]), (pointer2[0], pointer2[1]))
+
+        # Calculate weighted distance for the move
+        distance = weighted_distance(center, new_center, row_weight)
+
+        # Retrieve hold magnitudes for current and next center points
+        # Current center holds: pointer1 and pointer2
+        hold_dir1, hold_mag1 = get_hold_vector(pointer1[1], pointer1[0])  # (row, col)
+        hold_dir2, hold_mag2 = get_hold_vector(pointer2[1], pointer2[0])  # (row, col)
+
+        # Next center holds: pointer2 and next_hold
+        hold_dir3, hold_mag3 = get_hold_vector(next_hold[1], next_hold[0])  # (row, col)
+
+        # Calculate product of magnitudes
+        current_product = hold_mag1 * hold_mag2
+        next_product = hold_mag2 * hold_mag3
+
+        # Ensure the product is above the minimum threshold to prevent large scores
+        product = current_product * next_product
+        if product < min_product:
+            product = min_product
+
+        # Calculate difficulty score
+        difficulty_score = distance / product
+
+        # Optional: Cap the difficulty_score to a reasonable maximum to prevent outliers
+        max_difficulty = 1000.0  # Adjust based on expected difficulty range
+        if difficulty_score > max_difficulty:
+            difficulty_score = max_difficulty
+
+        # Aggregate weighted distances
+        total_weighted_distance += difficulty_score
+        weighted_distances.append(difficulty_score)
+
+        # Update pointers
+        sequence.append(next_hold)
+        used_holds.add(next_hold[3])
+        center = new_center
+        pointer1 = pointer2
+        pointer2 = next_hold
+
+    if not weighted_distances:
+        # Avoid division by zero if no moves were made
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+
+    # Calculate average and maximum weighted distances
+    average_weighted_distance = total_weighted_distance / len(weighted_distances)
+    highest_weighted_distance = max(weighted_distances)
+
+    # Calculate top N weighted distances
+    k = max(1, int(math.ceil(len(weighted_distances) * (percent / 100.0))))
+    top_weighted_distances = sorted(weighted_distances, reverse=True)[:k]
+    top_n_weighted_distance_sum = sum(top_weighted_distances)
+    top_n_average_weighted_distance = top_n_weighted_distance_sum / k if k > 0 else 0.0
+
+    return total_weighted_distance, average_weighted_distance, top_n_weighted_distance_sum, top_n_average_weighted_distance, highest_weighted_distance
+
+def benchmark2(frame, row_weight=0.1, percent=50.0):
+    def weighted_distance(point1, point2, row_weight=0.1):
+        x1, y1 = point1
+        x2, y2 = point2
+        euclidean = math.hypot(x2 - x1, y2 - y1)
+        weighted = euclidean - (row_weight * min(y1, y2))
+        return weighted
+
+    def find_center(hold1, hold2):
+        x1, y1 = hold1
+        x2, y2 = hold2
+        return ((x1 + x2) / 2, (y1 + y2) / 2)
+
+    def find_next_closest_hold(center, hand_holds, used_holds, row_weight=0.1):
+        min_distance = float('inf')
+        next_hold = None
+        for hold in hand_holds:
+            _, _, z, word = hold
+            if word in used_holds:
+                continue
+            col, row, _ = hold[:3]
+            point = (col, row)
+            distance = weighted_distance(center, point, row_weight)
+            if distance < min_distance:
+                min_distance = distance
+                next_hold = hold
+        return next_hold
+
+    triplet_list = frame_to_triplets(frame)
+    frame_words = frame.split('p')[1:]
+    combined_holds = []
+    for triplet, word_part in zip(triplet_list, frame_words):
+        col, row, z = triplet
+        hold_word = f"p{word_part}"
+        combined_hold = (col, row, z, hold_word)
+        combined_holds.append(combined_hold)
+
+    hand_holds = [hold for hold in combined_holds if hold[2] in (0, 1)]
+    sorted_hand_holds = sorted(hand_holds, key=lambda x: (x[1], x[0]))
+    start_holds = [hold for hold in sorted_hand_holds if hold[2] == 0]
+
+    sequence = []
+    used_holds = set()
+    total_distance = 0.0
+    count = 0
+    distances = []
+
+    if len(start_holds) >= 2:
+        start_holds_sorted = sorted(start_holds, key=lambda x: x[1])
+        pointer1, pointer2 = start_holds_sorted[0], start_holds_sorted[1]
+        sequence.extend([pointer1, pointer2])
+        used_holds.update([pointer1[3], pointer2[3]])
+        center = find_center(pointer1[:2], pointer2[:2])
+    elif len(start_holds) == 1:
+        pointer1 = pointer2 = start_holds[0]
+        sequence.append(pointer1)
+        used_holds.add(pointer1[3])
+        center = pointer1[:2]
+    else:
+        if len(sorted_hand_holds) >= 2:
+            pointer1, pointer2 = sorted_hand_holds[0], sorted_hand_holds[1]
+            sequence.extend([pointer1, pointer2])
+            used_holds.update([pointer1[3], pointer2[3]])
+            center = find_center(pointer1[:2], pointer2[:2])
+        elif len(sorted_hand_holds) == 1:
+            pointer1 = pointer2 = sorted_hand_holds[0]
+            sequence.append(pointer1)
+            used_holds.add(pointer1[3])
+            center = pointer1[:2]
+        else:
+            return 0.0, 0.0, 0.0, 0.0
+
+    while True:
+        next_hold = find_next_closest_hold(center, sorted_hand_holds, used_holds, row_weight)
+        if not next_hold:
+            break
+        next_center = find_center(center, next_hold[:2])
+        distance = math.hypot(next_center[0] - center[0], next_center[1] - center[1])
+        total_distance += distance
+        distances.append(distance)
+        count += 1
+        used_holds.add(next_hold[3])
+        center = next_center
+
+    if count > 0:
+        average_distance = total_distance / count
+        k = max(1, int(math.ceil(len(distances) * (percent / 100.0))))
+        top_distances = sorted(distances, reverse=True)[:k]
+        top_n_distance_sum = sum(top_distances)
+        top_n_average_distance = top_n_distance_sum / k if k > 0 else 0.0
+        longest_distance = max(distances)
+    else:
+        average_distance = 0.0
+        top_n_distance_sum = 0.0
+        top_n_average_distance = 0.0
+        longest_distance = 0.0
+
+    return total_distance, average_distance, top_n_distance_sum, top_n_average_distance, longest_distance
+
+
+
+
+def benchmark1(frame, row_weight=0.1):
+    def weighted_distance(point1, point2, row_weight=0.1):
+        x1, y1 = point1
+        x2, y2 = point2
+        euclidean = math.hypot(x2 - x1, y2 - y1)
+        weighted = euclidean - (row_weight * min(y1, y2))
+        return weighted
+
+    def find_center(hold1, hold2):
+        x1, y1 = hold1
+        x2, y2 = hold2
+        return ((x1 + x2) / 2, (y1 + y2) / 2)
+
+    def find_next_closest_hold(center, hand_holds, used_holds, row_weight=0.1):
+        min_distance = float('inf')
+        next_hold = None
+        for hold in hand_holds:
+            _, _, z, word = hold
+            if word in used_holds:
+                continue
+            col, row, _ = hold[:3]
+            point = (col, row)
+            distance = weighted_distance(center, point, row_weight)
+            if distance < min_distance:
+                min_distance = distance
+                next_hold = hold
+        return next_hold
+
+    triplet_list = frame_to_triplets(frame)
+    frame_words = frame.split('p')[1:]
+    combined_holds = []
+    for triplet, word_part in zip(triplet_list, frame_words):
+        col, row, z = triplet
+        hold_word = f"p{word_part}"
+        combined_hold = (col, row, z, hold_word)
+        combined_holds.append(combined_hold)
+
+    hand_holds = [hold for hold in combined_holds if hold[2] in (0, 1)]
+    sorted_hand_holds = sorted(hand_holds, key=lambda x: (x[1], x[0]))
+    start_holds = [hold for hold in sorted_hand_holds if hold[2] == 0]
+
+    sequence = []
+    used_holds = set()
+    total_distance = 0.0
+
+    if len(start_holds) >= 2:
+        start_holds_sorted = sorted(start_holds, key=lambda x: x[1])
+        pointer1, pointer2 = start_holds_sorted[0], start_holds_sorted[1]
+        sequence.extend([pointer1, pointer2])
+        used_holds.update([pointer1[3], pointer2[3]])
+        center = find_center(pointer1[:2], pointer2[:2])
+    elif len(start_holds) == 1:
+        pointer1 = pointer2 = start_holds[0]
+        sequence.append(pointer1)
+        used_holds.add(pointer1[3])
+        center = pointer1[:2]
+    else:
+        if len(sorted_hand_holds) >= 2:
+            pointer1, pointer2 = sorted_hand_holds[0], sorted_hand_holds[1]
+            sequence.extend([pointer1, pointer2])
+            used_holds.update([pointer1[3], pointer2[3]])
+            center = find_center(pointer1[:2], pointer2[:2])
+        elif len(sorted_hand_holds) == 1:
+            pointer1 = pointer2 = sorted_hand_holds[0]
+            sequence.append(pointer1)
+            used_holds.add(pointer1[3])
+            center = pointer1[:2]
+        else:
+            return [], 0.0
+
+    while True:
+        next_hold = find_next_closest_hold(center, sorted_hand_holds, used_holds, row_weight)
+        if not next_hold:
+            break
+        next_center = find_center(center, next_hold[:2])
+        distance = math.hypot(next_center[0] - center[0], next_center[1] - center[1])
+        total_distance += distance
+        used_holds.add(next_hold[3])
+        center = next_center
+
+    return total_distance
+
+def sort_frame_2(frame):
     # Step 1: Parse the frame into (row, col, word) tuples
     frame_words = frame.split('p')[1:]  # Split and remove the first empty element
 
@@ -764,6 +1172,10 @@ def filtered_df_to_text_file(filtered_df, file_path='climbs.txt'):
         for climb_frame in climb_frames:
             file.write(climb_frame + '\n')
 
+def hold_id_and_val_to_frame(hold_ids, vals):
+    frame = ' '.join([f"p{hold_id}r{val + 12}" for hold_id, val in zip(hold_ids, vals)])
+    return frame
+
 def id_to_index(id):
     
     if id <=1089: #bottom large (row) 17x1
@@ -843,3 +1255,95 @@ def coordinates_distribution_to_index2(row_id, col_pred):
 # def coordinates_to_index2(row_id, col_id):
 #     index =  row_id * 35 + col_id
 #     if index in id_index_dict:
+def get_hold_vector(row, col):
+    if not isinstance(row, int):
+        raise TypeError(f"Row index must be an integer, got {type(row)} row: {row}")
+    if not isinstance(col, int):
+        raise TypeError(f"Column index must be an integer, got {type(col)} col: {col}")
+    
+    if row > 34 or col > 34:
+        if row > col:
+            raise ValueError(f"Row index {row} exceeds maximum allowed value of 34.")
+        else:
+            raise ValueError(f"Column index {col} exceeds maximum allowed value of 34.")
+    
+    if max(hold_directions[34 - row][col]) > 1:
+        index = int(hold_directions[34 - row][col][0]) - 1
+        hold_direction = hold_directions2[index].tolist()
+    else:
+        hold_direction = hold_directions[34 - row][col].tolist()
+    
+    hold_magnitude = hold_magnitudes[34 - row][col][0]
+    
+    return hold_direction, hold_magnitude
+
+# hold_direction, hold_magnitude = get_hold_vector(row, col)
+
+def unit_vector_to_sin(vector):
+    x, y = vector
+    angle_radians = np.arctan2(y, x)
+    sin_value = np.sin(angle_radians)
+    return sin_value
+
+def unit_vector_to_cos(vector):
+    x, y = vector
+    angle_radians = np.arctan2(y, x)
+    cos_value = np.cos(angle_radians)
+    return cos_value
+
+def modified_hold_quality(climb_angle, hold_quality):
+    if isinstance(climb_angle, torch.Tensor):
+        climb_angle_cpu = climb_angle.cpu().numpy()
+    else:
+        climb_angle_cpu = np.array(climb_angle)
+    climb_angle_radians = np.deg2rad(climb_angle_cpu)
+    modified_quality = np.cos(climb_angle_radians * hold_quality)
+    return modified_quality
+
+def interhold_angle(a, b):
+    x1, y1 = a
+    x2, y2 = b
+    angle_radians = np.arctan2(y2 - y1, x2 - x1)
+    return angle_radians
+
+def average_unit_vectors(vectors):
+    if len(vectors) == 1:
+        return vectors[0]
+    elif len(vectors) == 2:
+        avg_x = (vectors[0][0] + vectors[1][0]) / 2
+        avg_y = (vectors[0][1] + vectors[1][1]) / 2
+        norm = np.sqrt(avg_x**2 + avg_y**2)
+        return [avg_x / norm, avg_y / norm]
+    else:
+        raise ValueError("The input should be a list containing one or two unit vectors.")
+
+def id_to_class_id(id):
+    if id <=1089: # 0-16
+        class_id = id - 1073 
+    elif id <=1395: # 17-322
+        class_id = id - 1090 + 17
+    elif id <= 1464: # 323-340
+        class_id = id - 1447 + 323
+    elif id <= 1599: # 341-475
+        class_id = id - 1465 + 341
+    return class_id
+
+def class_id_to_id(class_id):
+    if class_id <= 16:  # 0-16
+        id = class_id + 1073
+    elif class_id <= 322:  # 17-322
+        id = class_id + 1090 - 17
+    elif class_id <= 340:  # 323-340
+        id = class_id + 1447 - 323
+    elif class_id <= 475:  # 341-475
+        id = class_id + 1465 - 341 
+    return id
+
+def ids_to_hold_val_class_id(hold_class_id, val_class_id):
+    hold_val_class_id = (hold_class_id) * 4 + val_class_id
+    return hold_val_class_id
+
+def hold_val_class_id_to_ids(hold_val_class_id):
+    val_class_id = hold_val_class_id % 4
+    hold_class_id = int((hold_val_class_id - val_class_id) /4)
+    return hold_class_id, val_class_id
