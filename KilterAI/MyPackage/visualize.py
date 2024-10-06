@@ -208,7 +208,7 @@ def frame_to_image_indexed(frame):
     # Open the image and prepare to draw
     image = Image.open(image_path)
     draw = ImageDraw.Draw(image)
-    font = ImageFont.truetype("arial.ttf", 30)
+    font = ImageFont.truetype("arial.ttf", 35)
 
     hold_colors = {0: '#00FF00', 1: 'cyan', 2: 'magenta', 3: 'orange'}
     
